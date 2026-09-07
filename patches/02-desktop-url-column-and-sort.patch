@@ -1,0 +1,43 @@
+diff --git a/apps/desktop/src/vault/app/vault-v3/vault-items/vault-cipher-row.component.html b/apps/desktop/src/vault/app/vault-v3/vault-items/vault-cipher-row.component.html
+--- a/apps/desktop/src/vault/app/vault-v3/vault-items/vault-cipher-row.component.html
++++ b/apps/desktop/src/vault/app/vault-v3/vault-items/vault-cipher-row.component.html
+@@ -48,13 +48,7 @@
+ @if (showOwner()) {
+   <!-- Breakpoint must match the Owner header cell in vault-list.component.html. -->
+   <td bitCell [ngClass]="RowHeightClass" class="tw-hidden @xl:tw-table-cell">
+-    <app-org-badge
+-      [disabled]="disabled()"
+-      [organizationId]="cipher().organizationId"
+-      [organizationName]="cipher().organizationId | orgNameFromId: organizations()"
+-    >
+-    </app-org-badge>
++    <span class="tw-text-sm tw-text-muted" appStopProp>{{ launchUri() }}</span>
+   </td>
+ }
+ <td bitCell [ngClass]="RowHeightClass" class="tw-text-right tw-whitespace-nowrap">
+diff --git a/apps/desktop/src/vault/app/vault-v3/vault-list.component.html b/apps/desktop/src/vault/app/vault-v3/vault-list.component.html
+--- a/apps/desktop/src/vault/app/vault-v3/vault-list.component.html
++++ b/apps/desktop/src/vault/app/vault-v3/vault-list.component.html
+@@ -52,5 +52,5 @@
+               class="tw-hidden @xl:tw-table-cell"
+               [ngClass]="ownerColumnWidthClass"
+             >
+-              {{ "owner" | i18n }}
++              URL
+             </th>
+diff --git a/apps/desktop/src/vault/app/vault-v3/vault-list.component.ts b/apps/desktop/src/vault/app/vault-v3/vault-list.component.ts
+--- a/apps/desktop/src/vault/app/vault-v3/vault-list.component.ts
++++ b/apps/desktop/src/vault/app/vault-v3/vault-list.component.ts
+@@ -279,8 +279,8 @@ export class VaultListComponent<C extends CipherView> implements OnInit, OnDestr
+   protected sortByOwner = (a: VaultItem<C>, b: VaultItem<C>, direction: SortDirection) => {
+-    const getOwnerName = (item: VaultItem<C>): string => {
++    const getUriOrName = (item: VaultItem<C>): string => {
+       if (item.cipher) {
+-        return (item.cipher.organizationId as string) || "";
++        return (CipherView.getLaunchUri(item.cipher) as string) || "";
+       } else if (item.collection) {
+         return (item.collection.name as string) || "";
+       }
+-    return getOwnerName(a).localeCompare(getOwnerName(b));
++    return getUriOrName(a).localeCompare(getUriOrName(b));
+   };
