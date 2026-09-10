@@ -94,11 +94,73 @@ bitwarden-enhancer/
 │   ├── 01-linux-persistent-biometrics.patch
 │   ├── 02-desktop-url-column-and-sort.patch
 │   └── 03-web-vault-url-column-and-sort.patch
+├── patches/                         # (see above, plus)
+│   └── 04-desktop-compiled-biometrics.patch  # Same fix against the shipped bundle
 └── scripts/                         # Standalone python patch engines
-    ├── patch-desktop.py             # Binary asar / JS patcher for Desktop
+    ├── patch-desktop.py             # Renderer bundle patcher (URL column, sorting)
+    ├── patch-biometrics-compiled.py # Applies 04-... to the main-process bundle
     ├── patch-web-vault.py           # Web Vault JS bundle patcher
+    ├── repack-desktop-asar.sh       # Rebuild a patched app.asar for the installed version
     └── patch-bitwarden.sh           # APT Post-Invoke hook script
 ```
+
+---
+
+## 🔁 Surviving Package Upgrades
+
+A saved patched `app.asar` belongs to the Bitwarden version it was built from. Copying it over a
+newer build downgrades the client, so an upgrade needs the patch **rebuilt**, not restored:
+
+```bash
+sudo scripts/repack-desktop-asar.sh \
+    --source /opt/Bitwarden/resources/app.asar \
+    --output /tmp/app.asar.patched
+```
+
+The script extracts the installed asar, applies the patches and packs it back with
+`--unpack-dir 'node_modules/@bitwarden/desktop-napi'`, refusing to hand over a result that lost the
+biometrics marker or came back unchanged. It needs `python3` plus either `asar` or `npx`
+(`npm i -g asar` avoids re-downloading `asar@3.2.0` on every run). Roughly 20 seconds on an SSD.
+
+The two patch families age very differently, and the script treats them accordingly:
+
+| Patch | Bundle | Anchors | On a new release |
+|-------|--------|---------|------------------|
+| Persistent biometrics | `main.js` (main process) | `class OsBiometricsServiceLinux`, `exports["default"] = ...` — **not** minified | Keeps applying; **required**, a miss fails the repack |
+| URL column + sorting | `app/main.js` (renderer) | mangled ids like `a.bMT(2,1,"owner")`, `Cn.n.getLaunchUri` | Likely to miss after a webpack rebuild; reported, non-fatal (use `--require-all` to make it fatal) |
+
+`patches/04-desktop-compiled-biometrics.patch` is the compiled counterpart of
+`patches/01-linux-persistent-biometrics.patch`: the source patch needs the whole client rebuilt,
+while this one applies to a bundle as shipped. A webpack bundle is a single enormous line, so
+diffing the file is pointless — `patch-biometrics-compiled.py` slices the class block out, patches
+that on its own with `patch(1)`, and splices it back.
+
+Upstream 2026.8.0 already ships the scaffolding: the `Bitwarden_biometric` service name is
+referenced elsewhere, and `enrollPersistent` / `hasPersistentKey` exist as stubs that do nothing and
+return `false`. The patch fills them in and routes `getBiometricKey` through the Secret Service
+first, which is what makes an unlock survive a restart. It touches only those hunks — upstream
+comments and any unrelated edits to the class stay put.
+
+Verified against Bitwarden 2026.8.0 (`Bitwarden-2026.8.0-amd64.deb`, sha256
+`720ecc39…7bb415`): applying the patch to the pristine bundle produces exactly the block a working
+patched install carries, re-running reports "already applied", and a full extract/patch/pack cycle
+on the pristine asar takes ~11 s. On that release the renderer patches landed only partially — the
+sorting comparator matched, the header and row patterns did not — which is the expected asymmetry.
+
+### Unattended upgrades (Debian / Ubuntu)
+
+`scripts/patch-bitwarden.sh` is the APT `Post-Invoke` hook. The variant maintained in
+[prostopasta/dotfiles](https://github.com/prostopasta/dotfiles) (`bitwarden/patch-bitwarden.sh`)
+goes further: it records the version a copy was built for in `app.asar.patched.version` and, when
+the installed version moves ahead, calls `repack-desktop-asar.sh` to rebuild the copy instead of
+restoring a stale one. Point it at this checkout with:
+
+```bash
+echo 'BW_ENHANCER_DIR=/path/to/bitwarden-enhancer' | sudo tee /etc/default/bitwarden-enhancer
+```
+
+If the rebuild fails, the hook leaves `app.asar` untouched — a client without biometrics beats a
+broken one.
 
 ---
 

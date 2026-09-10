@@ -1,0 +1,107 @@
+Persistent biometric unlock for the Bitwarden Desktop Linux client, as a patch
+against the *compiled* OsBiometricsServiceLinux block inside app.asar's main.js.
+
+Upstream (2026.8.0) already ships the scaffolding — the "Bitwarden_biometric"
+service name is referenced elsewhere, and enrollPersistent/hasPersistentKey exist
+as stubs returning nothing and false. This fills them in: the unlock key is stored
+in the FreeDesktop Secret Service, so a YubiKey/FIDO2 session survives a restart.
+The TypeScript counterpart is 01-linux-persistent-biometrics.patch.
+
+Applied by scripts/patch-biometrics-compiled.py, which slices the block out of
+main.js, patches it and splices it back. The slice anchors (`class
+OsBiometricsServiceLinux`, `exports["default"] = ...`) are not minified by tsc,
+so they survive upstream releases; the hunks themselves may need a refresh when
+upstream edits this class.
+
+Generated against Bitwarden 2026.8.0 (Bitwarden-2026.8.0-amd64.deb,
+sha256 720ecc392eef1992780af2aaabd4733916807155c8ee217ed67f3f93287bb415).
+
+--- a/OsBiometricsServiceLinux.js
++++ b/OsBiometricsServiceLinux.js
+@@ -1,3 +1,7 @@
++const SERVICE = "Bitwarden_biometric";
++function getLookupKeyForUser(userId) {
++    return `${userId}_user_biometric`;
++}
+ class OsBiometricsServiceLinux {
+     constructor() {
+         this.biometricsSystem = desktop_napi_1.biometrics.initBiometricSystem();
+@@ -5,17 +9,39 @@
+     setBiometricKey(userId, key) {
+         return __awaiter(this, void 0, void 0, function* () {
+             yield desktop_napi_1.biometrics.provideKey(this.biometricsSystem, userId, Buffer.from(key.toEncoded().buffer));
++            try {
++                yield desktop_napi_1.passwords.setPassword(SERVICE, getLookupKeyForUser(userId), key.toBase64());
++            } catch (e) {
++                console.error("[OsBiometricsServiceLinux] Failed to store persistent key in secret service:", e);
++            }
+         });
+     }
+     deleteBiometricKey(userId) {
+         return __awaiter(this, void 0, void 0, function* () {
+             yield desktop_napi_1.biometrics.unenroll(this.biometricsSystem, userId);
++            try {
++                yield desktop_napi_1.passwords.deletePassword(SERVICE, getLookupKeyForUser(userId));
++            } catch (e) { }
+         });
+     }
+     getBiometricKey(userId) {
+         return __awaiter(this, void 0, void 0, function* () {
+-            const result = yield desktop_napi_1.biometrics.unlock(this.biometricsSystem, userId, Buffer.from(""));
+-            return result ? new symmetric_crypto_key_1.SymmetricCryptoKey(Uint8Array.from(result)) : null;
++            const authSuccess = yield this.authenticateBiometric();
++            if (!authSuccess) {
++                return null;
++            }
++            try {
++                const keyB64 = yield desktop_napi_1.passwords.getPassword(SERVICE, getLookupKeyForUser(userId));
++                if (keyB64 != null) {
++                    return symmetric_crypto_key_1.SymmetricCryptoKey.fromString(keyB64);
++                }
++            } catch (e) { }
++            try {
++                const result = yield desktop_napi_1.biometrics.unlock(this.biometricsSystem, userId, Buffer.from(""));
++                return result ? new symmetric_crypto_key_1.SymmetricCryptoKey(Uint8Array.from(result)) : null;
++            } catch (e) {
++                return null;
++            }
+         });
+     }
+     authenticateBiometric() {
+@@ -73,17 +99,34 @@
+     }
+     getBiometricsFirstUnlockStatusForUser(userId) {
+         return __awaiter(this, void 0, void 0, function* () {
++            try {
++                const val = yield desktop_napi_1.passwords.getPassword(SERVICE, getLookupKeyForUser(userId));
++                if (val != null) {
++                    return key_management_1.BiometricsStatus.Available;
++                }
++            } catch (e) { }
+             return (yield desktop_napi_1.biometrics.unlockAvailable(this.biometricsSystem, userId))
+                 ? key_management_1.BiometricsStatus.Available
+                 : key_management_1.BiometricsStatus.UnlockNeeded;
+         });
+     }
+     enrollPersistent(userId, key) {
+-        return __awaiter(this, void 0, void 0, function* () { });
++        return __awaiter(this, void 0, void 0, function* () {
++            try {
++                yield desktop_napi_1.passwords.setPassword(SERVICE, getLookupKeyForUser(userId), key.toBase64());
++            } catch (e) {
++                console.error("[OsBiometricsServiceLinux] enrollPersistent failed:", e);
++            }
++        });
+     }
+     hasPersistentKey(userId) {
+         return __awaiter(this, void 0, void 0, function* () {
+-            return false;
++            try {
++                const val = yield desktop_napi_1.passwords.getPassword(SERVICE, getLookupKeyForUser(userId));
++                return val != null;
++            } catch (e) {
++                return false;
++            }
+         });
+     }
+ }
